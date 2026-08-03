@@ -57,7 +57,7 @@ jobs:
           if grep -q 'core/arch/Cpu.h' "$CODE_PATCH_FILE"; then
             sed -i \
               -e '/#include "core\/arch\/Cpu.h"/d' \
-              -e 's|ClearCache(|__builtin___clear_cache(|' \
+              -e 's|ClearCache((void \*)clear_start_, (void \*)(clear_start_ + buffer_size))|__builtin___clear_cache((char *)clear_start_, (char *)(clear_start_ + buffer_size))|' \
               "$CODE_PATCH_FILE"
             echo "✓ Patched code-patch-tool-posix.cc (drop Cpu.h, use __builtin___clear_cache)"
           fi
