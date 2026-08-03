@@ -36,14 +36,14 @@ jobs:
 
       - name: Patch Dobby asm for NDK 25+ clang
         run: |
-          # NDK 25 的 clang 对 ADRP 引用的符号要求显式 .extern 声明，
+          # NDK 25+ 的 LLVM 对 ADRP 引用的符号要求明确的 .type 声明，
           # 否则报 "invalid symbol kind for ADRP relocation"。
-          # Dobby 的 closure_bridge_arm64.asm 缺少 .extern 声明，这里补上。
+          # .extern 无效，必须用 .type 声明为 %function。
           ASM_FILE="app/src/main/cpp/dobby/source/TrampolineBridge/ClosureTrampolineBridge/arm64/closure_bridge_arm64.asm"
-          if [ -f "$ASM_FILE" ] && ! grep -q "^.extern.*common_closure_bridge_handler" "$ASM_FILE"; then
-            sed -i '/^adrp TMP_REG_0, cdecl(common_closure_bridge_handler)@PAGE$/i\.extern cdecl(common_closure_bridge_handler)' "$ASM_FILE"
-            echo "✓ Patched Dobby closure_bridge_arm64.asm"
-            grep -n "\.extern\|adrp.*common_closure_bridge" "$ASM_FILE"
+          if [ -f "$ASM_FILE" ] && ! grep -q "\.type.*common_closure_bridge_handler" "$ASM_FILE"; then
+            sed -i '/^adrp TMP_REG_0, cdecl(common_closure_bridge_handler)@PAGE$/i\.type cdecl(common_closure_bridge_handler), %function' "$ASM_FILE"
+            echo "✓ Patched Dobby closure_bridge_arm64.asm (.type)"
+            grep -n "\.type.*common_closure\|adrp.*common_closure" "$ASM_FILE"
           else
             echo "Dobby asm already patched or file not found, skip"
           fi

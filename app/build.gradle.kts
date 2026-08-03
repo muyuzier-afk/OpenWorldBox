@@ -6,9 +6,8 @@ plugins {
 android {
     namespace = "com.openworldbox"
     compileSdk = 34
-    // NDK 27（LLVM 19）对 Dobby 的 arm64 asm 兼容性更好，
-    // 避免 NDK 25 的 "invalid symbol kind for ADRP relocation" 错误
-    ndkVersion = "27.2.12479018"
+    // NDK 27（ubuntu-latest 预装版本）
+    ndkVersion = "27.3.13750724"
 
     defaultConfig {
         applicationId = "com.openworldbox"
