@@ -58,8 +58,8 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
-          # packages 必须空格分隔，不能用 YAML 块标量（会保留换行导致查找失败）
-          packages: platforms;android-34 build-tools;34.0.0 ndk;25.2.9519653 cmake;3.22.1
+          # packages 必须空格分隔。NDK 用 ubuntu-latest 预装的 27（不单独装，避免版本回退）
+          packages: platforms;android-34 build-tools;34.0.0 cmake;3.22.1
 
       - name: Verify environment
         run: |
@@ -67,8 +67,8 @@ jobs:
           ls -la app/src/main/cpp/imgui/imgui.h || { echo "ImGui submodule 未拉取"; exit 1; }
           echo "=== Dobby 源码检查 ==="
           ls -la app/src/main/cpp/dobby/CMakeLists.txt || { echo "Dobby submodule 未拉取"; exit 1; }
-          echo "=== NDK 版本 ==="
-          ls ${ANDROID_SDK_ROOT}/ndk/
+          echo "=== 预装 NDK 版本 ==="
+          ls ${ANDROID_SDK_ROOT}/ndk/ || echo "无预装 NDK"
           echo "=== CMake 版本 ==="
           ls ${ANDROID_SDK_ROOT}/cmake/
 
