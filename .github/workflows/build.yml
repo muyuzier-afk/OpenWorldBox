@@ -1,0 +1,97 @@
+name: Build APK
+
+on:
+  # 推送到 main 分支时构建
+  push:
+    branches: [ main ]
+    # 关键路径变更才触发
+    paths:
+      - 'app/**'
+      - 'build.gradle.kts'
+      - 'settings.gradle.kts'
+      - 'gradle.properties'
+      - 'gradle/wrapper/**'
+      - '.github/workflows/build.yml'
+  # PR 到 main 时构建
+  pull_request:
+    branches: [ main ]
+  # 手动触发
+  workflow_dispatch:
+  # 发布 Release 时构建
+  release:
+    types: [ published ]
+
+jobs:
+  build:
+    name: Build Debug & Release APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # 拉取 submodule（ImGui）
+          submodules: recursive
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          # 仅安装必要的组件，加快速度
+          packages: |
+            platforms;android-34
+            build-tools;34.0.0
+            ndk;25.2.9519653
+            cmake;3.22.1
+
+      - name: Verify environment
+        run: |
+          echo "=== ImGui 源码检查 ==="
+          ls -la app/src/main/cpp/imgui/imgui.h || { echo "ImGui submodule 未拉取"; exit 1; }
+          echo "=== Dobby 源码检查 ==="
+          ls -la app/src/main/cpp/dobby/CMakeLists.txt || { echo "Dobby submodule 未拉取"; exit 1; }
+          echo "=== NDK 版本 ==="
+          ls ${ANDROID_SDK_ROOT}/ndk/
+          echo "=== CMake 版本 ==="
+          ls ${ANDROID_SDK_ROOT}/cmake/
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x ./gradlew
+
+      - name: Build Debug APK
+        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
+
+      - name: Build Release APK
+        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
+
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenWorldBox-debug
+          path: app/build/outputs/apk/debug/*.apk
+          retention-days: 30
+
+      - name: Upload Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenWorldBox-release
+          path: app/build/outputs/apk/release/*.apk
+          retention-days: 90
+
+      # 如果是 release 发布，附加到 GitHub Release
+      - name: Attach APK to Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            app/build/outputs/apk/release/*.apk
+            app/build/outputs/apk/debug/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

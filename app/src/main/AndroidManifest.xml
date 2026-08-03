@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Overlay 需要（实际上在游戏进程内用 TYPE_APPLICATION 不需要悬浮窗权限，
+         但保留声明以防需要切到系统级 overlay） -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:allowBackup="false"
+        android:label="OpenWorldBox"
+        android:supportsRtl="true"
+        android:hasCode="true">
+
+        <!-- Xposed 模块声明 -->
+        <meta-data
+            android:name="xposedmodule"
+            android:value="true" />
+        <meta-data
+            android:name="xposeddescription"
+            android:value="OpenWorldBox - 网易我的世界(x19) Mod 工具" />
+        <meta-data
+            android:name="xposedminversion"
+            android:value="82" />
+        <!-- 明确作用域：网易我的世界中国版 -->
+        <meta-data
+            android:name="xposedscope"
+            android:resource="@array/xposed_scope" />
+
+        <!-- 模块自身的占位 Activity（实际不启动，仅满足系统要求） -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="false" />
+
+    </application>
+</manifest>

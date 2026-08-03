@@ -1,0 +1,6 @@
+[submodule "app/src/main/cpp/imgui"]
+	path = app/src/main/cpp/imgui
+	url = https://github.com/ocornut/imgui.git
+[submodule "app/src/main/cpp/dobby"]
+	path = app/src/main/cpp/dobby
+	url = https://github.com/jmpews/Dobby.git

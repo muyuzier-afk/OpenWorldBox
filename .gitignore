@@ -1,0 +1,46 @@
+# ===== Android / Gradle =====
+*.iml
+.gradle/
+/local.properties
+/build
+/app/build
+/captures
+.externalNativeBuild
+.cxx
+
+# Kotlin
+.kotlin/
+
+# ===== IDE =====
+/.idea
+.vscode/
+*.swp
+*.swo
+*~
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+
+# ===== 本地工具链配置（CI 自带 JDK/NDK）=====
+local.properties
+mise.toml
+
+# ===== 敏感文件（绝不入库）=====
+*.keystore
+*.jks
+keystore.properties
+*.p12
+*.pem
+secrets.properties
+google-services.json
+
+# ===== 性能/调试产物 =====
+*.hprof
+*.log
+hs_err_pid*
+
+# ===== 不要忽略以下内容（显式声明）=====
+!.gitmodules
+!.github/
+!gradle/wrapper/gradle-wrapper.jar

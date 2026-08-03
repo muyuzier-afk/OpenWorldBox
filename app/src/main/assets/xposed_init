@@ -1,0 +1,2 @@
+# Xposed 模块自身的入口类
+com.openworldbox.core.HookInit
