@@ -36,36 +36,30 @@ jobs:
 
       - name: Patch Dobby for NDK 25+ clang
         run: |
-          # === Patch 1: 文字池替代 ADRP ===
-          # NDK 25+ 的 LLVM 对 ADRP 引用未定义外部符号报
-          # "invalid symbol kind for ADRP relocation"。
-          # 改用文字池（adr+ldr+.xword）绕过 ADRP 重定位。
+          # === Patch 1: ADRP 改用 GOT 间接（PIC 共享库兼容）===
+          # NDK 25+ LLVM 对 adrp+@PAGE 引用外部函数符号报
+          # "invalid symbol kind for ADRP relocation"。改用 GOT 间接加载，
+          # 生成 R_AARCH64_ADR_GOT_PAGE / LD64_GOT_LO12_NC，PIC 合法。
+          # 不能用文字池 .xword，否则链接报 R_AARCH64_ABS64（共享库禁止绝对重定位）。
           ASM_FILE="app/src/main/cpp/dobby/source/TrampolineBridge/ClosureTrampolineBridge/arm64/closure_bridge_arm64.asm"
-          if ! grep -q ".Lccbh_pool" "$ASM_FILE" 2>/dev/null; then
-            awk '
-            /^adrp TMP_REG_0, cdecl\(common_closure_bridge_handler\)@PAGE$/ {
-              print "adr TMP_REG_0, .Lccbh_pool"
-              print "ldr TMP_REG_0, [TMP_REG_0]"
-              print "blr TMP_REG_0"
-              print "b .Lccbh_done"
-              print ".align 3"
-              print ".Lccbh_pool:"
-              print ".xword cdecl(common_closure_bridge_handler)"
-              print ".Lccbh_done:"
-              getline; getline
-              next
-            }
-            { print }
-            ' "$ASM_FILE" > "$ASM_FILE.tmp" && mv "$ASM_FILE.tmp" "$ASM_FILE"
-            echo "✓ Patched closure_bridge_arm64.asm (literal pool)"
+          if grep -q "cdecl(common_closure_bridge_handler)@PAGE" "$ASM_FILE"; then
+            sed -i \
+              -e 's|adrp TMP_REG_0, cdecl(common_closure_bridge_handler)@PAGE|adrp TMP_REG_0, :got:cdecl(common_closure_bridge_handler)|' \
+              -e 's|add TMP_REG_0, TMP_REG_0, cdecl(common_closure_bridge_handler)@PAGEOFF|ldr TMP_REG_0, [TMP_REG_0, :got_lo12:cdecl(common_closure_bridge_handler)]|' \
+              "$ASM_FILE"
+            echo "✓ Patched closure_bridge_arm64.asm (GOT indirect)"
           fi
 
-          # === Patch 2: 移除 code-patch-tool-posix.cc ===
-          # 该文件 include 了不存在的 core/arch/Cpu.h（Dobby 仓库从未有此文件）。
-          DOBBY_CMAKE="app/src/main/cpp/dobby/CMakeLists.txt"
-          if grep -q "code-patch-tool-posix" "$DOBBY_CMAKE"; then
-            sed -i '/code-patch-tool-posix\.cc/d' "$DOBBY_CMAKE"
-            echo "✓ Removed code-patch-tool-posix.cc from Dobby CMakeLists"
+          # === Patch 2: 修复 code-patch-tool-posix.cc（去掉不存在的 Cpu.h）===
+          # 该文件 include 了不存在的 core/arch/Cpu.h。ClearCache 用 clang 内建
+          # __builtin___clear_cache 替代。保留文件以提供 DobbyCodePatch 定义（链接需要）。
+          CODE_PATCH_FILE="app/src/main/cpp/dobby/source/Backend/UserMode/ExecMemory/code-patch-tool-posix.cc"
+          if grep -q 'core/arch/Cpu.h' "$CODE_PATCH_FILE"; then
+            sed -i \
+              -e '/#include "core\/arch\/Cpu.h"/d' \
+              -e 's|ClearCache(|__builtin___clear_cache(|' \
+              "$CODE_PATCH_FILE"
+            echo "✓ Patched code-patch-tool-posix.cc (drop Cpu.h, use __builtin___clear_cache)"
           fi
 
           # === Patch 3: 修复 os_arch_features.h 循环 include ===
