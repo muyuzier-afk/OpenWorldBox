@@ -68,6 +68,32 @@ jobs:
             echo "✓ Removed code-patch-tool-posix.cc from Dobby CMakeLists"
           fi
 
+          # === Patch 3: 修复 os_arch_features.h 循环 include ===
+          # platform.h 在定义 OSMemory 之前先 include dobby/common.h →
+          # os_arch_features.h，导致此处 OSMemory 不可见（#pragma once 跳过 platform.h）。
+          # 改用 POSIX sysconf/mprotect 替代 OSMemory 调用，打破循环依赖。
+          OS_ARCH_FILE="app/src/main/cpp/dobby/common/os_arch_features.h"
+          if grep -q "OSMemory::PageSize" "$OS_ARCH_FILE"; then
+            sed -i \
+              -e 's|#include "pac_kit.h"|#include <unistd.h>\n#include <sys/mman.h>\n#include "pac_kit.h"|' \
+              -e 's|OSMemory::PageSize()|sysconf(_SC_PAGESIZE)|g' \
+              -e 's|!OSMemory::SetPermission(page, sysconf(_SC_PAGESIZE), kReadExecute)|!(mprotect(page, sysconf(_SC_PAGESIZE), PROT_READ \| PROT_EXEC) == 0)|' \
+              "$OS_ARCH_FILE"
+            echo "✓ Patched os_arch_features.h (POSIX mprotect, break circular include)"
+          fi
+
+          # === Patch 4: 修复 ProcessRuntime.cc 字段名 ===
+          # Dobby 重构后 MemRange.start 改为方法 start()，RuntimeModule 字段
+          # load_address 改名为 base。Linux 版 .cc 未同步更新。
+          PROCESS_RUNTIME_CC="app/src/main/cpp/dobby/source/Backend/UserMode/PlatformUtil/Linux/ProcessRuntime.cc"
+          if grep -qE "module\.load_address|a\.start < b\.start" "$PROCESS_RUNTIME_CC"; then
+            sed -i \
+              -e 's|a\.start < b\.start|a.start() < b.start()|' \
+              -e 's|module\.load_address|module.base|g' \
+              "$PROCESS_RUNTIME_CC"
+            echo "✓ Patched ProcessRuntime.cc (field names: start→start(), load_address→base)"
+          fi
+
       - name: Setup JDK 17
         uses: actions/setup-java@v4
         with:
