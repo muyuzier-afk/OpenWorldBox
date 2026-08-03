@@ -145,7 +145,7 @@ object KillAuraModule : Module(
     // ============ 生命周期 ============
 
     override fun onEnabled() {
-        Logger.i("KillAura 已启用: range=${range.get()}, cps=${cps.get()}, mode=${rotationMode.selectedOption}")
+        Logger.i("KillAura 已启用: range=${range.get()}, cps=${cps.get()}, mode=${rotationMode.value}")
         lastAttackTimeMs = 0L
         currentTarget = null
     }

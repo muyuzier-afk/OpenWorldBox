@@ -15,7 +15,7 @@ object Logger {
         // 反射调用 XposedBridge.log，避免编译期强依赖
         val cls = Class.forName("de.robv.android.xposed.XposedBridge")
         val method = cls.getMethod("log", String::class.java)
-        { msg: String -> method.invoke(null, msg) }
+        ({ msg: String -> method.invoke(null, msg) })
     } catch (_: Throwable) {
         null
     }

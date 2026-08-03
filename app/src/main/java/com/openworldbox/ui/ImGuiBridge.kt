@@ -55,7 +55,7 @@ object ImGuiBridge {
         NativeBridge.nativeSeparator()
 
         // 模块列表（按分类作为 Tab）
-        if (NativeBridge.nativeBeginTabBar("modules")) {
+        if (NativeBridge.nativeBeginTabBar("modules") != 0) {
             for ((category, modules) in ModuleManager.grouped()) {
                 if (modules.isEmpty()) continue
                 if (NativeBridge.nativeBeginTabItem(category.displayName)) {
