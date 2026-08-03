@@ -6,8 +6,9 @@ plugins {
 android {
     namespace = "com.openworldbox"
     compileSdk = 34
-    // NDK 27（ubuntu-latest 预装版本）
-    ndkVersion = "27.3.13750724"
+    // NDK 25（ubuntu-latest 预装）。NDK 27 的 LLVM 19 与 Dobby C++ 代码不兼容
+    // （OSMemory/Cpu.h 等问题）。NDK 25 配合文字池 patch 即可编译。
+    ndkVersion = "25.1.8937393"
 
     defaultConfig {
         applicationId = "com.openworldbox"
