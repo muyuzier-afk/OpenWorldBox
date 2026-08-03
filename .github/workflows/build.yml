@@ -36,16 +36,31 @@ jobs:
 
       - name: Patch Dobby asm for NDK 25+ clang
         run: |
-          # NDK 25+ 的 LLVM 对 ADRP 引用的符号要求明确的 .type 声明，
-          # 否则报 "invalid symbol kind for ADRP relocation"。
-          # .extern 无效，必须用 .type 声明为 %function。
+          # NDK 25+ 的 LLVM 对 ADRP 引用未定义外部符号报
+          # "invalid symbol kind for ADRP relocation"。
+          # .extern / .type 声明均无效，必须改用文字池（literal pool）
+          # 加载地址（adr+ldr+.xword），绕过 ADRP 重定位。
           ASM_FILE="app/src/main/cpp/dobby/source/TrampolineBridge/ClosureTrampolineBridge/arm64/closure_bridge_arm64.asm"
-          if [ -f "$ASM_FILE" ] && ! grep -q "\.type.*common_closure_bridge_handler" "$ASM_FILE"; then
-            sed -i '/^adrp TMP_REG_0, cdecl(common_closure_bridge_handler)@PAGE$/i\.type cdecl(common_closure_bridge_handler), %function' "$ASM_FILE"
-            echo "✓ Patched Dobby closure_bridge_arm64.asm (.type)"
-            grep -n "\.type.*common_closure\|adrp.*common_closure" "$ASM_FILE"
+          if grep -q ".Lccbh_pool" "$ASM_FILE" 2>/dev/null; then
+            echo "Dobby asm already patched, skip"
           else
-            echo "Dobby asm already patched or file not found, skip"
+            awk '
+            /^adrp TMP_REG_0, cdecl\(common_closure_bridge_handler\)@PAGE$/ {
+              print "adr TMP_REG_0, .Lccbh_pool"
+              print "ldr TMP_REG_0, [TMP_REG_0]"
+              print "blr TMP_REG_0"
+              print "b .Lccbh_done"
+              print ".align 3"
+              print ".Lccbh_pool:"
+              print ".xword cdecl(common_closure_bridge_handler)"
+              print ".Lccbh_done:"
+              getline; getline
+              next
+            }
+            { print }
+            ' "$ASM_FILE" > "$ASM_FILE.tmp" && mv "$ASM_FILE.tmp" "$ASM_FILE"
+            echo "✓ Patched Dobby closure_bridge_arm64.asm (literal pool)"
+            grep -n "Lccbh\|adr.*Lccbh\|xword.*common_closure" "$ASM_FILE"
           fi
 
       - name: Setup JDK 17
