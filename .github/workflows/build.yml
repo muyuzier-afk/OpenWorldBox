@@ -34,16 +34,14 @@ jobs:
           # 拉取 submodule（ImGui）
           submodules: recursive
 
-      - name: Patch Dobby asm for NDK 25+ clang
+      - name: Patch Dobby for NDK 25+ clang
         run: |
+          # === Patch 1: 文字池替代 ADRP ===
           # NDK 25+ 的 LLVM 对 ADRP 引用未定义外部符号报
           # "invalid symbol kind for ADRP relocation"。
-          # .extern / .type 声明均无效，必须改用文字池（literal pool）
-          # 加载地址（adr+ldr+.xword），绕过 ADRP 重定位。
+          # 改用文字池（adr+ldr+.xword）绕过 ADRP 重定位。
           ASM_FILE="app/src/main/cpp/dobby/source/TrampolineBridge/ClosureTrampolineBridge/arm64/closure_bridge_arm64.asm"
-          if grep -q ".Lccbh_pool" "$ASM_FILE" 2>/dev/null; then
-            echo "Dobby asm already patched, skip"
-          else
+          if ! grep -q ".Lccbh_pool" "$ASM_FILE" 2>/dev/null; then
             awk '
             /^adrp TMP_REG_0, cdecl\(common_closure_bridge_handler\)@PAGE$/ {
               print "adr TMP_REG_0, .Lccbh_pool"
@@ -59,8 +57,15 @@ jobs:
             }
             { print }
             ' "$ASM_FILE" > "$ASM_FILE.tmp" && mv "$ASM_FILE.tmp" "$ASM_FILE"
-            echo "✓ Patched Dobby closure_bridge_arm64.asm (literal pool)"
-            grep -n "Lccbh\|adr.*Lccbh\|xword.*common_closure" "$ASM_FILE"
+            echo "✓ Patched closure_bridge_arm64.asm (literal pool)"
+          fi
+
+          # === Patch 2: 移除 code-patch-tool-posix.cc ===
+          # 该文件 include 了不存在的 core/arch/Cpu.h（Dobby 仓库从未有此文件）。
+          DOBBY_CMAKE="app/src/main/cpp/dobby/CMakeLists.txt"
+          if grep -q "code-patch-tool-posix" "$DOBBY_CMAKE"; then
+            sed -i '/code-patch-tool-posix\.cc/d' "$DOBBY_CMAKE"
+            echo "✓ Removed code-patch-tool-posix.cc from Dobby CMakeLists"
           fi
 
       - name: Setup JDK 17
