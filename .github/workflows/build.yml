@@ -44,12 +44,8 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
-          # 仅安装必要的组件，加快速度
-          packages: |
-            platforms;android-34
-            build-tools;34.0.0
-            ndk;25.2.9519653
-            cmake;3.22.1
+          # packages 必须空格分隔，不能用 YAML 块标量（会保留换行导致查找失败）
+          packages: platforms;android-34 build-tools;34.0.0 ndk;25.2.9519653 cmake;3.22.1
 
       - name: Verify environment
         run: |
