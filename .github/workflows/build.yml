@@ -94,6 +94,19 @@ jobs:
             echo "✓ Patched ProcessRuntime.cc (field names: start→start(), load_address→base)"
           fi
 
+          # === Patch 5: 全局修复 RuntimeModule.load_address 字段名 ===
+          # Dobby 重构将 RuntimeModule.load_address 改名为 base，但多个 builtin-plugin
+          # 与 PlatformUtil 的 .cc 未同步（dobby_symbol_resolver / import_replace 等）。
+          # 所有 load_address 均为 RuntimeModule 字段，全局替换安全（ctx.load_bias 不受影响）。
+          LOAD_ADDR_FILES=$(grep -rl 'load_address' app/src/main/cpp/dobby \
+            --include='*.cc' --include='*.cpp' --include='*.h' --include='*.c' || true)
+          if [ -n "$LOAD_ADDR_FILES" ]; then
+            echo "$LOAD_ADDR_FILES" | xargs sed -i \
+              -e 's/\.load_address/.base/g' \
+              -e 's/->load_address/->base/g'
+            echo "✓ Patched load_address → base in dobby sources (global)"
+          fi
+
       - name: Setup JDK 17
         uses: actions/setup-java@v4
         with:
