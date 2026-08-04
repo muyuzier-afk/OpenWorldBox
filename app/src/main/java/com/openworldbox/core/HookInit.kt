@@ -1,6 +1,5 @@
 package com.openworldbox.core
 
-import android.content.Context
 import com.openworldbox.ui.ImGuiBridge
 import com.openworldbox.util.Logger
 import de.robv.android.xposed.IXposedHookLoadPackage
@@ -17,6 +16,10 @@ import android.view.KeyEvent
  * 由 assets/xposed_init 指定，LSPosed/EdXposed 在每次加载目标包时调用。
  *
  * 作用域：com.netease.x19（网易我的世界中国版）
+ *
+ * 关键设计：网易 MC 用动态 dex 加载，handleLoadPackage 时游戏 Activity 类
+ * 尚未加载到 ClassLoader，Class.forName / findAndHookMethod(className,...) 都会失败。
+ * 因此 hook 基类 Activity.onCreate(Bundle)，在回调里按类名前缀过滤，命中才注入。
  */
 class HookInit : IXposedHookLoadPackage {
 
@@ -32,107 +35,76 @@ class HookInit : IXposedHookLoadPackage {
             return
         }
 
-        // 音量键 hook 不依赖游戏 Activity 类名，优先注册（hook 基类 Activity）。
+        // 音量键 hook（基类 Activity.dispatchKeyEvent，不依赖游戏类加载）
         hookMenuToggleKey()
 
-        // 动态探测游戏启动 Activity 类名
-        val activityName = resolveMainActivity(lpparam)
-        if (activityName == null) {
-            Logger.e("未找到游戏启动 Activity，onCreate 注入中止。" +
-                     "已尝试 PackageManager + 候选类名双路径，均失败。" +
-                     "请在手机执行：adb shell cmd package resolve-activity --brief com.netease.x19 " +
-                     "把输出反馈给开发者")
-            return
-        }
-        Logger.i("目标启动 Activity: $activityName")
+        // hook 基类 Activity.onCreate(Bundle)，回调里按类名前缀过滤
+        hookGameActivityOnCreate()
+    }
 
+    /**
+     * hook 基类 Activity.onCreate(Bundle)。
+     *
+     * 为什么不用 findAndHookMethod(具体类名, ...):
+     *   网易 MC 用动态 dex 加载，handleLoadPackage 时游戏 Activity 类尚未加载，
+     *   Class.forName / findAndHookMethod 都会失败。
+     *
+     * 方案：hook 基类 Activity.onCreate(Bundle)，所有 Activity 创建都会命中回调，
+     *   在回调里按类名前缀过滤，只对游戏 Activity 注入。
+     *   用 once-per-class 标记避免重复注入同一 Activity。
+     */
+    private fun hookGameActivityOnCreate() {
         try {
             XposedHelpers.findAndHookMethod(
-                activityName,
-                lpparam.classLoader,
+                Activity::class.java,
                 "onCreate",
                 Bundle::class.java,
                 object : XC_MethodHook() {
                     override fun afterHookedMethod(param: MethodHookParam) {
                         val activity = param.thisObject as? Activity ?: return
+                        val className = activity.javaClass.name
+                        if (!isGameActivity(className)) return
+                        if (injectedClasses.contains(className)) return
+                        injectedClasses.add(className)
+
+                        Logger.i("命中游戏 Activity: $className (来自 ${param.method})")
                         Logger.i("游戏 onCreate 完成，启动注入流程")
-                        GameActivity.start(activity)
+                        try {
+                            GameActivity.start(activity)
+                        } catch (t: Throwable) {
+                            Logger.e("注入流程异常", t)
+                        }
                     }
                 }
             )
-            Logger.i("已 hook $activityName.onCreate")
+            Logger.i("已 hook 基类 Activity.onCreate(Bundle)，等待游戏 Activity 创建")
         } catch (t: Throwable) {
-            Logger.e("hook onCreate 失败（类可能无 onCreate(Bundle) 签名）", t)
+            Logger.e("hook Activity.onCreate 失败", t)
         }
     }
 
     /**
-     * 探测游戏启动 Activity 类名。
+     * 判断是否是游戏 Activity。
      *
-     * 策略一（推荐，版本无关）：用 PackageManager.getLaunchIntentForPackage
-     *   拿系统注册的真实启动 Activity——无论网易壳子怎么改包名/类名都能命中。
-     *   需要 Context，通过反射拿 ActivityThread.currentApplication()（Xposed 环境可用）。
+     * 网易 MC 真实启动 Activity（来自 dumpsys）：
+     *   - com.netease.minecraftpe.MainActivityDefault（默认入口）
+     *   - com.netease.minecraftpe.MainActivityDynTestOxidized/Mid/Fresh（测试变体）
+     *   - com.mojang.minecraftpe.MainActivity（xbox invite 入口）
      *
-     * 策略二（回退）：硬编码候选类名，用 ClassLoader 探测。
+     * 用前缀匹配，兼容未来类名变体。同时打日志便于排查未命中情况。
      */
-    private fun resolveMainActivity(lpparam: LoadPackageParam): String? {
-        // === 策略一：PackageManager 动态查询 ===
-        try {
-            val ctx = currentContext()
-            if (ctx != null) {
-                val pm = ctx.packageManager
-                val intent = pm.getLaunchIntentForPackage(lpparam.packageName)
-                if (intent != null && intent.component != null) {
-                    val cls = intent.component!!.className
-                    Logger.i("PackageManager 命中启动 Activity: $cls")
-                    return cls
-                }
-                Logger.w("getLaunchIntentForPackage 返回 null，回退候选探测")
-            } else {
-                Logger.w("currentContext 为 null，回退候选探测")
-            }
-        } catch (t: Throwable) {
-            Logger.w("PackageManager 查询失败: ${t.message}，回退候选探测")
-        }
-
-        // === 策略二：候选类名探测 ===
-        // 来源：dumpsys package com.netease.x19 实测的 MAIN+LAUNCHER Activity
-        val candidates = listOf(
-            "com.netease.minecraftpe.MainActivityDefault",      // 默认启动入口
-            "com.netease.minecraftpe.MainActivityDynTestOxidized",
-            "com.netease.minecraftpe.MainActivityDynTestMid",
-            "com.netease.minecraftpe.MainActivityDynTestFresh",
-            "com.mojang.minecraftpe.MainActivity",              // xbox invite 入口，非启动入口
-            "com.netease.x19.MainActivity",
-            "com.netease.mc.MainActivity",
-            "com.netease.mc.WelcomeActivity",
-            "com.netease.x19.WelcomeActivity"
+    private fun isGameActivity(className: String): Boolean {
+        // 精确匹配已知启动入口
+        val knownPrefixes = listOf(
+            "com.netease.minecraftpe.MainActivity",
+            "com.mojang.minecraftpe.MainActivity"
         )
-        for (name in candidates) {
-            try {
-                Class.forName(name, false, lpparam.classLoader)
-                Logger.i("命中候选 Activity: $name")
-                return name
-            } catch (_: Throwable) {
-                Logger.d("候选 Activity 不存在: $name")
+        for (p in knownPrefixes) {
+            if (className == p || className.startsWith("$p")) {
+                return true
             }
         }
-        return null
-    }
-
-    /**
-     * 获取当前应用 Context。
-     * Xposed 注入目标进程后，通过 ActivityThread.currentApplication() 拿到宿主 Context。
-     */
-    private fun currentContext(): Context? {
-        return try {
-            val cl = Class.forName("android.app.ActivityThread")
-            val method = cl.getDeclaredMethod("currentApplication")
-            method.invoke(null) as? Context
-        } catch (t: Throwable) {
-            Logger.w("获取 currentApplication 失败: ${t.message}")
-            null
-        }
+        return false
     }
 
     companion object {
@@ -141,6 +113,9 @@ class HookInit : IXposedHookLoadPackage {
 
         /** 切换菜单的快捷键 */
         const val TOGGLE_KEYCODE = KeyEvent.KEYCODE_VOLUME_UP
+
+        /** 已注入过的 Activity 类名集合，避免重复注入 */
+        private val injectedClasses = mutableSetOf<String>()
     }
 
     /**
@@ -175,4 +150,3 @@ class HookInit : IXposedHookLoadPackage {
         }
     }
 }
-
