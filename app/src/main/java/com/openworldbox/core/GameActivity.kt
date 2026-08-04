@@ -32,8 +32,18 @@ object GameActivity {
     @Volatile var moduleApkPath: String = ""
         private set
 
+    /** 模块 nativeLibraryDir（由 HookInit.initZygote 解压 so 后注入，优先于 PackageManager 查询） */
+    @Volatile var moduleNativeLibDir: String = ""
+        private set
+
     /** 主线程 Handler */
     val mainHandler = Handler(Looper.getMainLooper())
+
+    /** 供 HookInit 注入预解压的 native 库目录（绕过宿主进程 PackageManager 查询） */
+    @JvmStatic
+    fun setModuleNativeLibDir(dir: String) {
+        moduleNativeLibDir = dir
+    }
 
     /**
      * 启动入口。在游戏 Activity onCreate 后调用。
@@ -101,14 +111,29 @@ object GameActivity {
      * 失败则回退到 System.loadLibrary（依赖 ClassLoader，不一定有效）。
      */
     private fun loadNativeLibrary(context: Context) {
+        val soName = "libopenworldbox.so"
+
+        // 优先用 HookInit.initZygote 预解压的目录（绕过宿主 PackageManager 跨包查询失败）
+        val injectedDir = moduleNativeLibDir
+        if (injectedDir.isNotEmpty()) {
+            val soFile = File(injectedDir, soName)
+            Logger.i("loadNativeLibrary(injected): ${soFile.absolutePath}, exists=${soFile.exists()}")
+            if (soFile.exists()) {
+                System.load(soFile.absolutePath)
+                Logger.i("已加载 native 库(injected): ${soFile.absolutePath}")
+                return
+            }
+            Logger.w("注入的 nativeLibDir 下无 so，回退 PackageManager 查询")
+        }
+
+        // 回退：查询模块 APK 的 nativeLibraryDir
         val nativeDir = try {
             val pm = context.packageManager
             val info = pm.getApplicationInfo(MODULE_PACKAGE, PackageManager.GET_META_DATA)
             info.nativeLibraryDir
         } catch (_: Throwable) { "" }
 
-        val soName = "libopenworldbox.so"
-        Logger.i("loadNativeLibrary: nativeDir=$nativeDir, soName=$soName")
+        Logger.i("loadNativeLibrary(pm): nativeDir=$nativeDir, soName=$soName")
         if (nativeDir.isNotEmpty()) {
             val soFile = File(nativeDir, soName)
             Logger.i("so 文件路径: ${soFile.absolutePath}, exists=${soFile.exists()}")
@@ -118,7 +143,7 @@ object GameActivity {
                 return
             }
         }
-        // 回退
+        // 最终回退
         Logger.w("nativeLibraryDir 下未找到 so，回退 System.loadLibrary（依赖 ClassLoader）")
         try {
             System.loadLibrary("openworldbox")
