@@ -59,14 +59,11 @@ class HookInit : IXposedHookLoadPackage, IXposedHookZygoteInit {
             val info = ApplicationInfo()
             info.sourceDir = moduleApkPath
             moduleAppInfo = info
-
-            // Android 8+ 宿主进程内拿到的模块 nativeLibraryDir 可能为空，
-            // 这里提前从 APK 解压 so 到模块目录，缓存路径供 GameActivity 加载。
-            moduleNativeLibDir = extractNativeLibs(moduleApkPath)
-            info.nativeLibraryDir = moduleNativeLibDir
-            Logger.i("模块 nativeLibraryDir: $moduleNativeLibDir")
+            // native 库解压推迟到 StubApp 回调（此时有可写 Context），
+            // zygote 阶段无宿主 Context，无法拿到可写目录。
+            Logger.i("initZygote 完成，native 库将在 StubApp 回调时解压")
         } catch (t: Throwable) {
-            Logger.e("initZygote 解压 native 库失败", t)
+            Logger.e("initZygote 失败", t)
         }
     }
 
@@ -201,23 +198,36 @@ class HookInit : IXposedHookLoadPackage, IXposedHookZygoteInit {
         if (injected) return
         injected = true
 
-        // 把预解压的 native 库目录注入 GameActivity，绕过宿主 PackageManager 查询
+        // 1. 解压 native 库到宿主私有目录（ctx.filesDir 可写）
+        if (moduleNativeLibDir.isEmpty()) {
+            try {
+                moduleNativeLibDir = extractNativeLibs(ctx, moduleApkPath)
+                Logger.i("native 库已解压到: $moduleNativeLibDir")
+            } catch (t: Throwable) {
+                Logger.e("解压 native 库失败", t)
+            }
+        }
+        // 2. 注入路径给 GameActivity
         if (moduleNativeLibDir.isNotEmpty()) {
             GameActivity.setModuleNativeLibDir(moduleNativeLibDir)
         }
 
-        val app = ctx.applicationContext
-        Logger.i("injectCore: 注册 Activity 生命周期监听，等待游戏 Activity 创建")
+        // 3. 拿 Application 注册 Activity 生命周期监听
+        // StubApp.attachBaseContext 时 applicationContext 可能为 null，
+        // 用 ActivityThread.currentApplication() 兜底。
+        val app = resolveApplication(ctx)
+        if (app == null) {
+            Logger.e("injectCore: 无法获取 Application，跳过 Activity 监听注册")
+            return
+        }
+        Logger.i("injectCore: 注册 Activity 生命周期监听，等待游戏 Activity创建 (app=${app.javaClass.name})")
 
-        val appClass = app.javaClass
         try {
-            // 反射注册 ActivityLifecycleCallbacks（避免编译期依赖 AndroidX）
             val cbClass = Class.forName("android.app.Application\$ActivityLifecycleCallbacks")
-            val registerMethod = appClass.getMethod("registerActivityLifecycleCallbacks", cbClass)
+            val registerMethod = app.javaClass.getMethod("registerActivityLifecycleCallbacks", cbClass)
 
-            // 动态代理实现回调
             val handler = java.lang.reflect.Proxy.newProxyInstance(
-                appClass.classLoader,
+                app.javaClass.classLoader,
                 arrayOf(cbClass)
             ) { _, method, args ->
                 if (method.name == "onActivityCreated") {
@@ -238,6 +248,23 @@ class HookInit : IXposedHookLoadPackage, IXposedHookZygoteInit {
         } catch (t: Throwable) {
             Logger.e("注册 ActivityLifecycleCallbacks 失败", t)
         }
+    }
+
+    /**
+     * 获取 Application 实例。
+     * StubApp.attachBaseContext 阶段 applicationContext 可能返回 null，
+     * 优先用 ActivityThread.currentApplication()。
+     */
+    private fun resolveApplication(ctx: Context): android.app.Application? {
+        // 优先：ActivityThread.currentApplication()
+        try {
+            val cl = Class.forName("android.app.ActivityThread")
+            val m = cl.getDeclaredMethod("currentApplication")
+            val app = m.invoke(null) as? android.app.Application
+            if (app != null) return app
+        } catch (_: Throwable) {}
+        // 回退：ctx 本身 / applicationContext
+        return (ctx as? android.app.Application) ?: ctx.applicationContext as? android.app.Application
     }
 
     /**
@@ -315,33 +342,25 @@ class HookInit : IXposedHookLoadPackage, IXposedHookZygoteInit {
     }
 
     /**
-     * 从模块 APK 解压 native 库到模块目录，返回解压目录。
+     * 从模块 APK 解压 native 库到宿主私有目录，返回解压目录。
      *
-     * Android 8+ 上，Xposed 注入后宿主进程查询模块 APK 的 nativeLibraryDir
-     * 可能为空（系统不再自动解压 lib 到 data/app）。这里手动从 APK 的
-     * lib/<abi>/ 目录解压 so 文件到模块私有目录，供 System.load 使用。
+     * 必须用 ctx.filesDir（/data/data/<pkg>/files/）这种可写目录，
+     * 不能写 moduleApkPath 所在的 /data/app/...（系统目录无写权限）。
      *
-     * 解压路径：<moduleApkDir>/lib/<abi>/
-     * 返回该路径作为 nativeLibraryDir。
+     * 解压路径：<filesDir>/owb_lib/arm64-v8a/
      */
-    private fun extractNativeLibs(apkPath: String): String {
-        val apkFile = File(apkPath)
-        val libDir = File(apkFile.parentFile, "owb_lib/arm64-v8a")
-        if (!libDir.exists()) libDir.mkdirs()
-
-        // 检查是否已解压（避免重复 IO）
-        val soFile = File(libDir, "libopenworldbox.so")
-        if (soFile.exists() && soFile.length() > 0) {
-            Logger.i("native 库已解压: ${soFile.absolutePath}")
-            return libDir.absolutePath
+    private fun extractNativeLibs(ctx: Context, apkPath: String): String {
+        val libDir = File(ctx.filesDir, "owb_lib/arm64-v8a")
+        if (!libDir.exists() && !libDir.mkdirs()) {
+            throw java.io.IOException("无法创建目录: ${libDir.absolutePath}")
         }
+        Logger.i("解压目标: ${libDir.absolutePath}")
 
         ZipFile(apkPath).use { zip ->
             val entries = zip.entries()
             while (entries.hasMoreElements()) {
                 val entry = entries.nextElement()
                 val name = entry.name
-                // 只解压 arm64-v8a 的 so
                 if (name.startsWith("lib/arm64-v8a/") && name.endsWith(".so")) {
                     val soName = name.substringAfterLast("/")
                     val out = File(libDir, soName)
