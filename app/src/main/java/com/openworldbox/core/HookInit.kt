@@ -96,8 +96,13 @@ class HookInit : IXposedHookLoadPackage {
         }
 
         // === 策略二：候选类名探测 ===
+        // 来源：dumpsys package com.netease.x19 实测的 MAIN+LAUNCHER Activity
         val candidates = listOf(
-            "com.mojang.minecraftpe.MainActivity",
+            "com.netease.minecraftpe.MainActivityDefault",      // 默认启动入口
+            "com.netease.minecraftpe.MainActivityDynTestOxidized",
+            "com.netease.minecraftpe.MainActivityDynTestMid",
+            "com.netease.minecraftpe.MainActivityDynTestFresh",
+            "com.mojang.minecraftpe.MainActivity",              // xbox invite 入口，非启动入口
             "com.netease.x19.MainActivity",
             "com.netease.mc.MainActivity",
             "com.netease.mc.WelcomeActivity",
