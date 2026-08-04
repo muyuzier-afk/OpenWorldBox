@@ -22,11 +22,19 @@ class HookInit : IXposedHookLoadPackage {
     override fun handleLoadPackage(lpparam: LoadPackageParam) {
         if (lpparam.packageName != TARGET_PACKAGE) return
 
-        Logger.i("HookInit loaded in ${lpparam.packageName}, proc=${lpparam.processName}")
+        Logger.i("========== OpenWorldBox HookInit loaded ==========")
+        Logger.i("package=${lpparam.packageName}, process=${lpparam.processName}")
 
-        // 优先 hook 网易封装的 Activity，回退到 Mojang 原版
-        val activityName = resolveMainActivity(lpparam.classLoader) ?: run {
-            Logger.w("未找到游戏 MainActivity，跳过注入")
+        // 音量键 hook 不依赖游戏 Activity 类名，优先注册（hook 基类 Activity）。
+        // 这样即使下面 Activity 探测失败，音量键仍能工作（配合 toggleMenu 的日志可定位故障）。
+        hookMenuToggleKey()
+
+        // 探测游戏主 Activity
+        val activityName = resolveMainActivity(lpparam.classLoader)
+        if (activityName == null) {
+            Logger.e("未找到游戏 MainActivity（候选均不存在），onCreate 注入中止。" +
+                     "若反复出现，请用 'adb shell dumpsys package com.netease.x19 | grep -A5 MAIN' " +
+                     "查实际启动 Activity 类名反馈给开发者")
             return
         }
         Logger.i("目标 MainActivity: $activityName")
@@ -48,10 +56,6 @@ class HookInit : IXposedHookLoadPackage {
         } catch (t: Throwable) {
             Logger.e("hook onCreate 失败", t)
         }
-
-        // hook 按键事件：音量上键切换菜单显隐
-        // 拦截在游戏之前，避免被游戏消费
-        hookMenuToggleKey(activityName, lpparam.classLoader)
     }
 
     /**
@@ -63,16 +67,19 @@ class HookInit : IXposedHookLoadPackage {
     private fun resolveMainActivity(cl: ClassLoader): String? {
         val candidates = listOf(
             "com.mojang.minecraftpe.MainActivity",
-            "com.netease.x19.MainActivity"
+            "com.netease.x19.MainActivity",
+            "com.netease.mc.MainActivity"
         )
-        return candidates.firstOrNull { name ->
+        for (name in candidates) {
             try {
                 Class.forName(name, false, cl)
-                true
+                Logger.i("命中候选 Activity: $name")
+                return name
             } catch (_: Throwable) {
-                false
+                Logger.d("候选 Activity 不存在: $name")
             }
         }
+        return null
     }
 
     companion object {
@@ -84,15 +91,17 @@ class HookInit : IXposedHookLoadPackage {
     }
 
     /**
-     * hook 游戏的 dispatchKeyEvent，拦截音量上键用于切换菜单。
+     * hook 基类 Activity.dispatchKeyEvent 拦截音量上键，切换菜单显隐。
      *
-     * 使用 beforeHookedMethod + setResult(null) 阻止事件继续传给游戏。
+     * 为什么 hook 基类而非游戏 Activity：网易 MC 用 NativeActivity/Mojang 引擎，
+     * MainActivity 通常不重写 dispatchKeyEvent，用 findAndHookMethod(游戏Activity,...)
+     * 会因找不到方法抛 NoSuchMethodError 导致 hook 静默失败。
+     * hook 基类 Activity 后，子类未重写则调用会命中 hook。
      */
-    private fun hookMenuToggleKey(activityName: String, classLoader: ClassLoader) {
+    private fun hookMenuToggleKey() {
         try {
             XposedHelpers.findAndHookMethod(
-                activityName,
-                classLoader,
+                Activity::class.java,
                 "dispatchKeyEvent",
                 KeyEvent::class.java,
                 object : XC_MethodHook() {
@@ -100,16 +109,16 @@ class HookInit : IXposedHookLoadPackage {
                         val event = param.args[0] as? KeyEvent ?: return
                         if (event.keyCode != TOGGLE_KEYCODE) return
                         if (event.action != KeyEvent.ACTION_DOWN) return
-                        Logger.i("捕获菜单切换键，切换菜单")
+                        Logger.i("捕获 VOLUME_UP，切换菜单")
                         ImGuiBridge.toggleMenu()
                         // 阻止事件传给游戏
                         param.result = true
                     }
                 }
             )
-            Logger.i("已注册菜单切换键 hook (VOLUME_UP)")
+            Logger.i("已注册菜单切换键 hook (基类 Activity.dispatchKeyEvent, VOLUME_UP)")
         } catch (t: Throwable) {
-            Logger.w("注册 dispatchKeyEvent hook 失败: ${t.message}")
+            Logger.e("注册 dispatchKeyEvent hook 失败", t)
         }
     }
 }

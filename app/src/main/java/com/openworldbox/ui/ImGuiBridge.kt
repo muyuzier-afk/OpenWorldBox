@@ -185,7 +185,15 @@ object ImGuiBridge {
 
     /** 切换菜单显隐 */
     fun toggleMenu() {
-        val overlay = currentOverlay() ?: return
+        val overlay = currentOverlay()
+        if (overlay == null) {
+            com.openworldbox.util.Logger.w(
+                "toggleMenu: overlay 未挂载，菜单无法切换。" +
+                "可能原因：native 库加载失败 / 游戏 onCreate hook 未触发 / Activity 探测失败。" +
+                "请查 logcat tag=OpenWorldBox 排查"
+            )
+            return
+        }
         overlay.toggleMenu()
     }
 

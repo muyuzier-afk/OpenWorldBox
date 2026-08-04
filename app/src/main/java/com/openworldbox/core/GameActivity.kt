@@ -108,8 +108,10 @@ object GameActivity {
         } catch (_: Throwable) { "" }
 
         val soName = "libopenworldbox.so"
+        Logger.i("loadNativeLibrary: nativeDir=$nativeDir, soName=$soName")
         if (nativeDir.isNotEmpty()) {
             val soFile = File(nativeDir, soName)
+            Logger.i("so 文件路径: ${soFile.absolutePath}, exists=${soFile.exists()}")
             if (soFile.exists()) {
                 System.load(soFile.absolutePath)
                 Logger.i("已加载 native 库: ${soFile.absolutePath}")
@@ -117,8 +119,14 @@ object GameActivity {
             }
         }
         // 回退
-        System.loadLibrary("openworldbox")
-        Logger.i("已通过 loadLibrary 加载 native 库")
+        Logger.w("nativeLibraryDir 下未找到 so，回退 System.loadLibrary（依赖 ClassLoader）")
+        try {
+            System.loadLibrary("openworldbox")
+            Logger.i("已通过 loadLibrary 加载 native 库")
+        } catch (t: Throwable) {
+            Logger.e("System.loadLibrary 也失败，native 库未加载", t)
+            throw t
+        }
     }
 
     /**
