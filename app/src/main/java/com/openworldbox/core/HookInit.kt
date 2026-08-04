@@ -169,6 +169,7 @@ class HookInit : IXposedHookLoadPackage, IXposedHookZygoteInit {
     /**
      * 修复穿山甲 SDK FileProvider 在网易壳下的崩溃。
      * 非必需，但能避免部分版本启动崩溃影响注入。
+     * 用 beforeHookedMethod + setResult 避免方法签名不匹配导致的崩溃。
      */
     private fun fixPangleCrash(classLoader: ClassLoader) {
         try {
@@ -177,10 +178,15 @@ class HookInit : IXposedHookLoadPackage, IXposedHookZygoteInit {
                 classLoader, "attachInfo",
                 Context::class.java,
                 android.content.pm.ProviderInfo::class.java,
-                de.robv.android.xposed.XC_MethodReplacement.returnConstant(null)
+                object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        // 拦截穿山甲 FileProvider.attachInfo，避免在网易壳下崩溃
+                        param.result = null
+                    }
+                }
             )
         } catch (_: Throwable) {
-            // 无穿山甲 SDK，忽略
+            // 无穿山甲 SDK 或方法签名不同，忽略
         }
     }
 
