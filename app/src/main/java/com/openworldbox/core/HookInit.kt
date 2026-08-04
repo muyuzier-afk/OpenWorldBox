@@ -191,14 +191,15 @@ class HookInit : IXposedHookLoadPackage, IXposedHookZygoteInit {
     }
 
     /**
-     * 注入核心：定位游戏 Activity，触发 GameActivity.start。
+     * 注入核心：解压 native 库 + 注册 Activity 创建 hook。
      *
-     * StubApp.attachBaseContext 时游戏 Activity 尚未创建，
-     * 但 Application 已就绪，可注册 Activity 生命周期监听等待 Activity 出现。
-     * 此处复用现有 GameActivity.start（已实现 native 加载 + overlay 挂载）。
+     * StubApp.attachBaseContext 时游戏 Activity 尚未创建，需要 hook 系统级
+     * Activity 创建入口，等真实游戏 Activity 出现时触发 GameActivity.start。
      *
-     * 简化策略：通过 Application.registerActivityLifecycleCallbacks
-     * 监听首个 Activity onCreate，命中即注入。
+     * 注意：不能用 Application.registerActivityLifecycleCallbacks —— 网易壳
+     * StubApp.onCreate 会把 Application 从 UFProxyApplication 替换成
+     * com.mojang.minecraftpe.AppContext，导致回调随旧 Application 失效。
+     * 改用 Instrumentation.callActivityOnCreate（系统级，不受 Application 替换影响）。
      */
     private fun injectCore(ctx: Context) {
         if (injected) return
@@ -218,59 +219,55 @@ class HookInit : IXposedHookLoadPackage, IXposedHookZygoteInit {
             GameActivity.setModuleNativeLibDir(moduleNativeLibDir)
         }
 
-        // 3. 拿 Application 注册 Activity 生命周期监听
-        // StubApp.attachBaseContext 时 applicationContext 可能为 null，
-        // 用 ActivityThread.currentApplication() 兜底。
-        val app = resolveApplication(ctx)
-        if (app == null) {
-            Logger.e("injectCore: 无法获取 Application，跳过 Activity 监听注册")
-            return
-        }
-        Logger.i("injectCore: 注册 Activity 生命周期监听，等待游戏 Activity创建 (app=${app.javaClass.name})")
-
-        try {
-            val cbClass = Class.forName("android.app.Application\$ActivityLifecycleCallbacks")
-            val registerMethod = app.javaClass.getMethod("registerActivityLifecycleCallbacks", cbClass)
-
-            val handler = java.lang.reflect.Proxy.newProxyInstance(
-                app.javaClass.classLoader,
-                arrayOf(cbClass)
-            ) { _, method, args ->
-                if (method.name == "onActivityCreated") {
-                    val activity = args?.getOrNull(0) as? Activity
-                    if (activity != null) {
-                        Logger.i("Activity 创建: ${activity.javaClass.name}")
-                        try {
-                            GameActivity.start(activity)
-                        } catch (t: Throwable) {
-                            Logger.e("GameActivity.start 异常", t)
-                        }
-                    }
-                }
-                null
-            }
-            registerMethod.invoke(app, handler)
-            Logger.i("已注册 Activity 生命周期监听")
-        } catch (t: Throwable) {
-            Logger.e("注册 ActivityLifecycleCallbacks 失败", t)
-        }
+        // 3. hook Instrumentation.callActivityOnCreate —— 系统级 Activity 创建回调
+        //
+        // 网易 MC 的加固壳 StubApp.onCreate(native) 会把宿主 Application 从
+        // UFProxyApplication 替换成 com.mojang.minecraftpe.AppContext，
+        // 之前注册在 UFProxyApplication 上的 ActivityLifecycleCallbacks 会随旧
+        // Application 失效，永远收不到 onActivityCreated。
+        //
+        // Instrumentation.callActivityOnCreate 是系统级入口，所有 Activity 创建
+        // 必经（ActivityThread.performLaunchActivity → callActivityOnCreate），
+        // 不受 Application 替换影响。
+        hookInstrumentationCallActivityOnCreate()
     }
 
     /**
-     * 获取 Application 实例。
-     * StubApp.attachBaseContext 阶段 applicationContext 可能返回 null，
-     * 优先用 ActivityThread.currentApplication()。
+     * hook Instrumentation.callActivityOnCreate(Activity, Bundle)。
+     *
+     * 系统级 Activity 创建回调，所有 Activity 创建必经，不受网易壳 Application
+     * 替换影响。回调里按类名前缀过滤游戏 Activity，命中即触发 GameActivity.start。
      */
-    private fun resolveApplication(ctx: Context): android.app.Application? {
-        // 优先：ActivityThread.currentApplication()
+    private fun hookInstrumentationCallActivityOnCreate() {
         try {
-            val cl = Class.forName("android.app.ActivityThread")
-            val m = cl.getDeclaredMethod("currentApplication")
-            val app = m.invoke(null) as? android.app.Application
-            if (app != null) return app
-        } catch (_: Throwable) {}
-        // 回退：ctx 本身 / applicationContext
-        return (ctx as? android.app.Application) ?: ctx.applicationContext as? android.app.Application
+            XposedHelpers.findAndHookMethod(
+                "android.app.Instrumentation",
+                ClassLoader.getSystemClassLoader(),
+                "callActivityOnCreate",
+                Activity::class.java,
+                android.os.Bundle::class.java,
+                object : XC_MethodHook() {
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        val activity = param.args[0] as? Activity ?: return
+                        val clsName = activity.javaClass.name
+                        // 按类名前缀过滤游戏 Activity
+                        if (clsName.startsWith("com.netease.minecraftpe.MainActivity") ||
+                            clsName.startsWith("com.mojang.minecraftpe.MainActivity")
+                        ) {
+                            Logger.i("命中游戏 Activity: $clsName (Instrumentation)")
+                            try {
+                                GameActivity.start(activity)
+                            } catch (t: Throwable) {
+                                Logger.e("GameActivity.start 异常", t)
+                            }
+                        }
+                    }
+                }
+            )
+            Logger.i("已 hook Instrumentation.callActivityOnCreate")
+        } catch (t: Throwable) {
+            Logger.e("hook Instrumentation.callActivityOnCreate 失败", t)
+        }
     }
 
     /**
